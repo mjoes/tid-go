@@ -6,11 +6,12 @@ import (
 	"github.com/urfave/cli/v2"
 	"log"
 	"os"
+  "time"
 	"path/filepath"
   "fmt"
 )
 
-var db_path string = "~/.local/share/tid/tid.db"
+var db_path string = "tid/tid.db"
 
 func main() {
 	app := &cli.App{
@@ -21,12 +22,13 @@ func main() {
         Aliases: []string{"a"},
         Usage:   "Add a new AO to the list",
         Action: func(cCtx *cli.Context) error {
-          insertAO := `INSERT INTO A0 (code, name) VALUES (?, ?)`
           sqliteDatabase, _ := sql.Open("sqlite3", db_path)
+          insertAO := `INSERT INTO AO (code, name) VALUES (?, ?)`
           defer sqliteDatabase.Close()
-          stmt, _ := sqliteDatabase.Prepare(insertAO)
-          defer stmt.Close()
-          _, _ = stmt.Exec("test", "asdf")
+          _ , err := sqliteDatabase.Exec(insertAO, cCtx.Args().First(), cCtx.String("full-name"))
+          if err != nil {
+            panic(err)
+          }
           fmt.Println("added task: ", cCtx.Args().First(), "AND", cCtx.String("full-name"))
           return nil
         },
@@ -46,6 +48,66 @@ func main() {
           return nil
         },
       },
+			{
+        Name:    "start",
+        Aliases: []string{"s"},
+        Usage:   "Start time for an AO",
+        Action: func(cCtx *cli.Context) error {
+          sqliteDatabase, _ := sql.Open("sqlite3", db_path)
+          now := time.Now().Format("2006-01-02 15:04:05")
+          updateQuery := `
+            UPDATE log
+            SET active = 0, end_time = ?
+            WHERE active = 1;
+          `
+          _, err := sqliteDatabase.Exec(updateQuery, now)
+          if err != nil {
+              log.Fatal(err)
+          }
+
+          insertAO := `INSERT INTO log (code, start_time, end_time, active) VALUES (?, ?, ?, ?)`
+          exists, err := valueExists(sqliteDatabase, cCtx.Args().First()) 
+          if !exists {
+            log.Fatal("Code does not exist")
+          }
+          if err != nil {
+            log.Fatal(err)
+          }
+          defer sqliteDatabase.Close()
+          _ , err = sqliteDatabase.Exec(insertAO, cCtx.Args().First(), now, "", 1)
+          if err != nil {
+            panic(err)
+          }
+          fmt.Println("Starting log for:", cCtx.Args().First())
+          return nil
+        },
+        Before: func(cCtx *cli.Context) error {
+          if cCtx.Args().Len() != 1 {
+            return fmt.Errorf("Expecting exactly 1 argument")
+          }
+          return nil
+        },
+      },
+			{
+        Name:    "stop",
+        Usage:   "Stop log for today",
+        Action: func(cCtx *cli.Context) error {
+          sqliteDatabase, _ := sql.Open("sqlite3", db_path)
+          now := time.Now().Format("2006-01-02 15:04:05")
+          updateQuery := `
+            UPDATE log
+            SET active = 0, end_time = ?
+            WHERE active = 1;
+          `
+          _, err := sqliteDatabase.Exec(updateQuery, now)
+          if err != nil {
+              log.Fatal(err)
+          }
+          defer sqliteDatabase.Close()
+          fmt.Println("End log for today")
+          return nil
+        },
+      },
 		},
 	}
 	if fileExists(db_path) {
@@ -62,6 +124,7 @@ func create_database() {
 	sqliteDatabase, _ := sql.Open("sqlite3", db_path)
 	defer sqliteDatabase.Close()
 	initAO(sqliteDatabase)
+	initLog(sqliteDatabase)
 }
 
 func fileExists(filename string) bool {
@@ -70,7 +133,7 @@ func fileExists(filename string) bool {
 }
 
 func initAO(db *sql.DB) {
-	sqlAO := `CREATE TABLE AO (
+	sqlAO := `CREATE TABLE IF NOT EXISTS AO (
 		"code" TEXT NOT NULL PRIMARY KEY,		
 		"name" TEXT
   );`
@@ -79,4 +142,30 @@ func initAO(db *sql.DB) {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
+}
+
+func initLog(db *sql.DB) {
+	sqlLog := `CREATE TABLE IF NOT EXISTS log (
+		"code" TEXT NOT NULL,		
+		"start_time" TEXT,
+    "end_time" TEXT,
+    "active" INTEGER
+  );`
+
+	_, err := db.Exec(sqlLog)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+}
+
+func valueExists(db *sql.DB, value string) (bool, error) {
+    var exists bool
+
+    query := `SELECT EXISTS(SELECT 1 FROM AO WHERE code = ? LIMIT 1)`
+    err := db.QueryRow(query, value).Scan(&exists)
+    if err != nil {
+        return false, err
+    }
+
+    return exists, nil
 }
